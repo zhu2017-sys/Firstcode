@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>管理后台概览</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; margin:0; padding:20px; color:#1f2937; }
+      .grid { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+      .card { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+      h1 { font-size: 20px; margin: 0 0 16px; }
+      h2 { font-size: 14px; margin: 0; color:#6b7280; }
+      .val { font-size: 24px; font-weight: 700; margin-top:6px; }
+      .row { display:flex; gap:12px; margin-top:16px; }
+      #chart { height: 280px; }
+      .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:12px; }
+      input, select { padding:6px 8px; border:1px solid #e5e7eb; border-radius:8px; }
+      a { color:#2563eb; text-decoration:none; }
+    </style>
+  </head>
+  <body>
+    <h1>管理后台概览</h1>
+    <div class="toolbar">
+      <label>起止时间:
+        <input type="datetime-local" id="from" />
+        <input type="datetime-local" id="to" />
+      </label>
+      <label>趋势指标:
+        <select id="metric">
+          <option value="pv">PV</option>
+          <option value="uv">UV</option>
+          <option value="upload">上传</option>
+          <option value="analyze_success">分析完成</option>
+        </select>
+      </label>
+      <label>间隔:
+        <select id="interval">
+          <option value="day">按日</option>
+          <option value="hour">按时</option>
+        </select>
+      </label>
+      <button id="refresh">刷新</button>
+      <a href="/admin/export" target="_blank">导出JSONL</a>
+    </div>
+    <div class="grid">
+      <div class="card"><h2>PV</h2><div class="val" id="pv">-</div></div>
+      <div class="card"><h2>UV</h2><div class="val" id="uv">-</div></div>
+      <div class="card"><h2>有效上传</h2><div class="val" id="upload_valid">-</div></div>
+      <div class="card"><h2>分析完成率</h2><div class="val" id="analyze_rate">-</div></div>
+    </div>
+    <div class="row">
+      <div class="card" style="flex:1">
+        <h2>趋势图</h2>
+        <div id="chart"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card" style="flex:1">
+        <h2>漏斗</h2>
+        <div id="funnel" style="height:260px"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card" style="flex:1">
+        <div class="toolbar">
+          <h2>分组分析</h2>
+          <label style="margin-left:auto">维度:
+            <select id="group_by">
+              <option value="channel">渠道</option>
+              <option value="region">地域</option>
+              <option value="device">终端</option>
+              <option value="version">版本</option>
+            </select>
+          </label>
+        </div>
+        <div style="overflow:auto">
+          <table id="grouped_table" style="width:100%; border-collapse: collapse">
+            <thead>
+              <tr>
+                <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">维度</th>
+                <th style="text-align:right; padding:8px; border-bottom:1px solid #e5e7eb;">PV</th>
+                <th style="text-align:right; padding:8px; border-bottom:1px solid #e5e7eb;">UV</th>
+                <th style="text-align:right; padding:8px; border-bottom:1px solid #e5e7eb;">上传</th>
+                <th style="text-align:right; padding:8px; border-bottom:1px solid #e5e7eb;">分析完成</th>
+                <th style="text-align:right; padding:8px; border-bottom:1px solid #e5e7eb;">P95 耗时</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card" style="flex:1">
+        <div class="toolbar">
+          <h2>明细</h2>
+          <button id="reload_events" style="margin-left:auto">刷新明细</button>
+        </div>
+        <div style="max-height:320px; overflow:auto">
+          <table id="events_table" style="width:100%; border-collapse: collapse">
+            <thead>
+              <tr>
+                <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">时间</th>
+                <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">类型</th>
+                <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">会话/匿名ID</th>
+                <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">详情</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <script>
+      const el = (id) => document.getElementById(id);
+      const fmt = (d) => d.toISOString().slice(0,16);
+      const now = new Date();
+      const fromDefault = new Date(now.getTime() - 7*24*3600*1000);
+      el('from').value = fmt(fromDefault);
+      el('to').value = fmt(now);
+
+      async function fetchJSON(url) {
+        const res = await fetch(url); 
+        if (!res.ok) throw new Error('request failed');
+        return res.json();
+      }
+      function qs() {
+        const from = new Date(el('from').value).getTime();
+        const to = new Date(el('to').value).getTime();
+        return `from=${from}&to=${to}`;
+      }
+      async function loadOverview() {
+        const data = await fetchJSON(`/admin/metrics/overview?${qs()}`);
+        el('pv').textContent = data.pv ?? '-';
+        el('uv').textContent = data.uv ?? '-';
+        el('upload_valid').textContent = data.upload_valid ?? '-';
+        el('analyze_rate').textContent = (data.analyze_rate*100 || 0).toFixed(0) + '%';
+      }
+      async function loadTrends() {
+        const metric = el('metric').value;
+        const interval = el('interval').value;
+        const list = await fetchJSON(`/admin/metrics/trends?metric=${metric}&interval=${interval}&${qs()}`);
+        const x = list.map(i => new Date(i.t).toLocaleString());
+        const y = list.map(i => i.value);
+        const chart = echarts.init(el('chart'));
+        chart.setOption({
+          tooltip: { trigger: 'axis' },
+          xAxis: { type: 'category', data: x },
+          yAxis: { type: 'value' },
+          series: [{ type: 'line', data: y, smooth: true }]
+        });
+      }
+      async function loadFunnel() {
+        const data = await fetchJSON(`/admin/metrics/funnel?${qs()}`);
+        const chart = echarts.init(el('funnel'));
+        const series = [
+          { name:'PV', value: data.pv || 0 },
+          { name:'有效上传', value: data.upload_valid || 0 },
+          { name:'分析启动', value: data.analyze_start || 0 },
+          { name:'分析完成', value: data.analyze_success || 0 },
+        ];
+        chart.setOption({
+          tooltip: { trigger:'item', formatter: '{b}: {c}' },
+          series: [{
+            type: 'funnel',
+            left: '10%',
+            width: '80%',
+            label: { formatter: '{b}: {c}' },
+            data: series
+          }]
+        });
+      }
+      async function loadGrouped() {
+        const gb = el('group_by').value;
+        const list = await fetchJSON(`/admin/metrics/grouped?group_by=${gb}&${qs()}`);
+        const tbody = el('grouped_table').querySelector('tbody');
+        tbody.innerHTML = '';
+        list.forEach(row => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${row.key}</td>
+            <td style="padding:8px; border-bottom:1px solid #f3f4f6; text-align:right;">${row.pv}</td>
+            <td style="padding:8px; border-bottom:1px solid #f3f4f6; text-align:right;">${row.uv}</td>
+            <td style="padding:8px; border-bottom:1px solid #f3f4f6; text-align:right;">${row.upload}</td>
+            <td style="padding:8px; border-bottom:1px solid #f3f4f6; text-align:right;">${row.analyze_success}</td>
+            <td style="padding:8px; border-bottom:1px solid #f3f4f6; text-align:right;">${row.p95_latency}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+      async function loadEvents() {
+        const data = await fetchJSON(`/admin/events?${qs()}`);
+        const tbody = el('events_table').querySelector('tbody');
+        tbody.innerHTML = '';
+        data.items.forEach(ev => {
+          const tr = document.createElement('tr');
+          const meta = JSON.stringify(ev).slice(0, 120).replace(/</g, '&lt;');
+          tr.innerHTML = `
+            <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${new Date(ev.ts).toLocaleString()}</td>
+            <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${ev.type}</td>
+            <td style="padding:8px; border-bottom:1px solid #f3f4f6;">${ev.session_id || ev.anon_id || ''}</td>
+            <td style="padding:8px; border-bottom:1px solid #f3f4f6; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">${meta}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+      async function refresh() {
+        await loadOverview();
+        await loadTrends();
+        await loadFunnel();
+        await loadGrouped();
+        await loadEvents();
+      }
+      el('refresh').addEventListener('click', refresh);
+      el('group_by').addEventListener('change', loadGrouped);
+      el('reload_events').addEventListener('click', loadEvents);
+      refresh().catch(console.error);
+    </script>
+  </body>
+  </html>
